@@ -1,0 +1,498 @@
+<?php
+
+/**
+ * @file
+ * Module file for Braintree Payments module.
+ */
+
+/**
+ * Implements hook_menu().
+ */
+function commerce_braintree_menu() {
+  $items['admin/commerce/orders/%commerce_order/payment/%commerce_payment_transaction/edit_braintree'] = array(
+    'title' => 'Edit',
+    'page callback' => 'commerce_braintree_admin_edit_transaction',
+    'page arguments' => array(3, 5),
+    'access callback' => 'commerce_braintree_admin_edit_transaction_access',
+    'access arguments' => array(5),
+    'type' => MENU_LOCAL_TASK,
+    'context' => MENU_CONTEXT_INLINE,
+    'weight' => 20,
+  );
+
+  return $items;
+}
+
+/**
+ * Menu callback; display a page for editing a transaction.
+ */
+function commerce_braintree_admin_edit_transaction($order, $txn) {
+  drupal_set_title(t('Edit transaction #@id', array('@id' => $txn->transaction_id)));
+  return drupal_get_form('commerce_braintree_admin_edit_transaction_form', $order, $txn);
+}
+
+function commerce_braintree_admin_edit_transaction_form($form, &$form_state, $order, $txn) {
+  // Convert the price amount to the currency's major unit decimal value.
+  $amount = commerce_currency_amount_to_decimal($txn->amount, $txn->currency_code);
+
+  // Warn the user of the implications of editing a transaction.
+  $form['warning'] = array(
+    '#markup' => t("Editing a payment here will NOT affect the payment stored in Braintree's records! Only use this form if you know what you're doing."),
+  );
+  $form['amount'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Amount'),
+    '#default_value' => $amount,
+  );
+  $form['currency_code'] = array(
+    '#type' => 'select',
+    '#title' => t('Currency'),
+    '#options' => commerce_currency_code_options_list(),
+    '#default_value' => $txn->currency_code,
+  );
+  $form['status'] = array(
+    '#type' => 'select',
+    '#title' => t('Status'),
+    '#options' => array(
+      'pending' => t('Pending'),
+      'success' => t('Success'),
+      'failure' => t('Failure'),
+    ),
+    '#default_value' => $txn->status,
+  );
+  $form['order'] = array(
+    '#type' => 'value',
+    '#value' => $order,
+  );
+  $form['txn'] = array(
+    '#type' => 'value',
+    '#value' => $txn,
+  );
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Save'),
+  );
+
+  return $form;
+}
+
+function commerce_braintree_admin_edit_transaction_form_submit($form, &$form_state) {
+  $order = $form_state['values']['order'];
+  $txn = $form_state['values']['txn'];
+
+  // Assign the new values to the transaction.
+  $txn->currency_code = $form_state['values']['currency_code'];
+  $txn->amount = commerce_currency_decimal_to_amount($form_state['values']['amount'], $txn->currency_code);
+  $txn->status = $form_state['values']['status'];
+
+  // Save the transaction.
+  commerce_payment_transaction_save($txn);
+
+  // Redirect to the order's payment page.
+  $redirect = commerce_order_ui_order_uri($order);
+  $redirect['path'] .= '/payment';
+  $form_state['redirect'] = $redirect;
+
+  // Set a message.
+  drupal_set_message(t('Payment updated.'));
+}
+
+function commerce_braintree_admin_edit_transaction_access($txn) {
+  return $txn->payment_method == 'braintree' && commerce_payment_transaction_access('update', $txn);
+}
+
+/**
+ * Implements hook_commerce_payment_method_info().
+ */
+function commerce_braintree_commerce_payment_method_info() {
+  return array(
+    'braintree' => array(
+      'base' => 'commerce_braintree',
+      'title' => t('Braintree Payments'),
+      'display_title' => t('Credit card'),
+      'description' => t('Processes credit card payments through Braintree Payments.'),
+      'offsite' => TRUE,
+    ),
+  );
+}
+
+/**
+ * Callback for payment settings form.
+ */
+function commerce_braintree_settings_form($settings = array()) {
+  $form = array();
+
+  // Initiate the settings array.
+  $settings += array(
+    'sandbox' => array(
+      'merchantId' => '',
+      'publicKey' => '',
+      'privateKey' => '',
+    ),
+    'production' => array(
+      'merchantId' => '',
+      'publicKey' => '',
+      'privateKey' => '',
+    ),
+    'environment' => 'sandbox',
+  );
+
+  // Sandbox settings
+  $form['sandbox'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Sandbox environment'),
+    '#description' => t('These settings are used for testing purposes.'),
+    '#tree' => TRUE,
+  );
+  $form['sandbox']['merchantId'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Merchant ID'),
+    '#default_value' => $settings['sandbox']['merchantId'],
+    '#required' => TRUE,
+  );
+  $form['sandbox']['publicKey'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Public key'),
+    '#default_value' => $settings['sandbox']['publicKey'],
+    '#required' => TRUE,
+  );
+  $form['sandbox']['privateKey'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Private key'),
+    '#default_value' => $settings['sandbox']['privateKey'],
+    '#required' => TRUE,
+  );
+
+  // Production settings
+  $form['production'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Production environment'),
+    '#description' => t('These settings are used for when the site is live and accepting payments.'),
+    '#tree' => TRUE,
+  );
+  $form['production']['merchantId'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Merchant ID'),
+    '#default_value' => $settings['production']['merchantId'],
+    '#required' => TRUE,
+  );
+  $form['production']['publicKey'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Public key'),
+    '#default_value' => $settings['production']['publicKey'],
+    '#required' => TRUE,
+  );
+  $form['production']['privateKey'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Private key'),
+    '#default_value' => $settings['production']['privateKey'],
+    '#required' => TRUE,
+  );
+
+  $form['environment'] = array(
+    '#type' => 'radios',
+    '#title' => t('Mode'),
+    '#options' => array(
+      'sandbox' => ('Sandbox (for testing)'),
+      'production' => ('Production (for real transactions)'),
+    ),
+    '#default_value' => $settings['environment'],
+    '#required' => TRUE,
+  );
+
+  return $form;
+}
+
+/**
+ * Callback for redirect form.
+ *
+ * The redirect form is what initiates the Braintree transparent redirect.
+ */
+function commerce_braintree_redirect_form($form, &$form_state, $order, $payment_method) {
+  // Braintree requires an amount greater than 0 for the transaction total.
+  // If the amount is less than or equal to 0, the user shouldn't have to enter
+  // credit card info, anyway. So advance the order if the order total is less
+  // than or equal to 0.
+  if ($order->commerce_order_total['und'][0]['amount'] <= 0) {
+    commerce_payment_redirect_pane_next_page($order);
+    drupal_goto('checkout/' . $order->order_id . '/complete');
+  }
+
+  commerce_braintree_init_sdk($payment_method['settings']);
+
+  // Create transparent redirect data.
+  $data = Braintree_TransparentRedirect::transactionData(
+    array(
+      'transaction' => array(
+        'type' => Braintree_Transaction::SALE,
+        'amount' => $order->commerce_order_total['und'][0]['amount'] / 100,
+        'options' => array('submitForSettlement' => TRUE),
+      ),
+      'redirectUrl' => url('checkout/' . $order->order_id . '/payment/return/' . $order->data['payment_redirect_key'], array('absolute' => TRUE)),
+    )
+  );
+
+  $w = 0;
+
+  $form['#action'] = Braintree_TransparentRedirect::url();
+
+  // You'll see what this is for in
+  // commerce_braintree_form_commerce_checkout_form_payment_alter().
+  $form['#commerce_braintree'] = TRUE;
+
+  // Add the Braintree data as a hidden field.
+  $form['tr_data'] = array(
+    '#type' => 'hidden',
+    '#value' => $data,
+  );
+
+  $form['transaction'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Credit card'),
+    '#weight' => $w++,
+    // Braintree requires this data structure.
+    '#tree' => TRUE,
+  );
+
+  // Add CC fields.
+  $form['transaction']['credit_card']['cardholder_name'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Cardholder name'),
+    '#weight' => $w++,
+  );
+  $form['transaction']['credit_card']['number'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Credit card number'),
+    '#maxlength' => 19,
+    '#weight' => $w++,
+  );
+  $form['transaction']['credit_card']['cvv'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Security code (CVV)'),
+    '#weight' => $w++,
+  );
+  $form['transaction']['credit_card']['expiration_date'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Expiration date'),
+    '#description' => t('Enter in the format mm/yyyy'),
+    '#weight' => $w++,
+  );
+  $form['transaction']['billing']['postal_code'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Postal code'),
+    '#weight' => $w++,
+  );
+
+  // Inform the user how much she will be charged.
+  $amount = $order->commerce_order_total['und'][0]['amount'];
+  $code = $order->commerce_order_total['und'][0]['currency_code'];
+  $total = commerce_currency_format($amount, $code, $order);
+
+  $form['actions'] = array(
+    '#type' => 'fieldset',
+    '#weight' => $w++,
+  );
+
+  // Create a "Go back" link.
+  $form['actions']['cancel'] = array(
+    '#type' => 'link',
+    '#href' => 'checkout/' . $order->order_id . '/payment/back/' . $order->data['payment_redirect_key'],
+    '#title' => t('Go back'),
+    '#weight' => $w++,
+  );
+
+  $form['actions']['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Place order'),
+    '#weight' => $w++,
+  );
+
+  // Check whether customer profiles exist, so we can set a default value for
+  // the cardholder name and postal code.
+  $profile = NULL;
+  if (!empty($order->commerce_customer_billing['und'][0]['profile_id'])) {
+    // Load the billing profile.
+    $profile = commerce_customer_profile_load($order->commerce_customer_billing['und'][0]['profile_id']);
+  }
+  elseif (!empty($order->commerce_customer_shipping['und'][0]['profile_id'])) {
+    // Load the shipping profile.
+    $profile = commerce_customer_profile_load($order->commerce_customer_shipping['und'][0]['profile_id']);
+  }
+  // If a profile exists, extract the person's name and postal code.
+  if (!empty($profile)) {
+    $address = $profile->commerce_customer_address['und'][0];
+
+    // Since the address field allows names to be entered either as a single
+    // line or as a first/last name pair, we'll check both fields, starting
+    // with the single-line option.
+    if (!empty($address['name_line'])) {
+      $form['transaction']['credit_card']['cardholder_name']['#default_value'] = $address['name_line'];
+    }
+    elseif (!empty($address['first_name']) && !empty($address['last_name'])) {
+      $form['transaction']['credit_card']['cardholder_name']['#default_value'] = $address['first_name'] . ' ' . $address['last_name'];
+    }
+
+    // Fill in the postal code field.
+    if (!empty($address['postal_code'])) {
+      $form['transaction']['billing']['postal_code']['#default_value'] = $address['postal_code'];
+    }
+  }
+
+  return $form;
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ */
+function commerce_braintree_form_commerce_checkout_form_payment_alter(&$form, &$form_state, $form_id) {
+  // If this is a Braintree checkout payment form...
+  if (!empty($form['#commerce_braintree'])) {
+    // ...remove the useless help element. (This element isn't available in the
+    // $form array in commerce_braintree_redirect_form() above, so we have to
+    // unset it here in an alter() hook.)
+    unset($form['help']);
+  }
+}
+
+/**
+ * Validate the data returned upon redirection from Braintree.
+ */
+function commerce_braintree_redirect_form_validate($order, $payment_method) {
+  commerce_braintree_init_sdk($payment_method['settings']);
+
+  // Verify the query string.
+  $result = Braintree_TransparentRedirect::confirm(commerce_braintree_get_feedback());
+
+  // Initiate the transaction record.
+  $txn = commerce_payment_transaction_new('braintree', $order->order_id);
+  $txn->instance_id = $payment_method['instance_id'];
+  if (!empty($result->transaction)) {
+    $txn->remote_id = $result->transaction->_attributes['id'];
+  }
+
+  // Set the order total and currency code.
+  $total = $order->commerce_order_total['und'][0]['amount'];
+  $code = $order->commerce_order_total['und'][0]['currency_code'];
+  $txn->amount = $total;
+  $txn->currency_code = $code;
+
+  // Save the entire payload.
+  $payload = $_GET;
+  unset($payload['q']);
+  $txn->payload[REQUEST_TIME] = array(
+    'GET' => $payload,
+    'result' => $result,
+  );
+
+  // Set the status.
+  if ($result->success) {
+    $txn->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+  }
+  else {
+    $txn->status = COMMERCE_PAYMENT_STATUS_FAILURE;
+    $txn->message = $result->_attributes['message'];
+
+    // Set a message informing the user why the transaction failed.
+    drupal_set_message($result->_attributes['message']);
+  }
+
+  // Save the transaction.
+  commerce_payment_transaction_save($txn);
+
+  // Notify of validation status.
+  return (boolean)$result->success;
+}
+
+/**
+ * Return the query string that contains Braintree response, after a request.
+ *
+ * This is copied partly from the Braintree SDK, and partly from
+ * drupal.org/project/commerce_braintree. It removes the 'q=' parameter from
+ * $_SERVER['QUERY_STRING'], for servers in which that parameter is still
+ * present (e.g., Pantheon).
+ */
+function commerce_braintree_get_feedback() {
+  $feedback = FALSE;
+  if (isset($_SERVER['QUERY_STRING'])) {
+    $feedback = $_SERVER['QUERY_STRING'];
+    if (preg_match('/^q=([^&]*)&?(.*)$/', $feedback, $match)) {
+      $feedback = $match[2];
+    }
+  }
+  return $feedback;
+}
+
+/**
+ * Initiate the Braintree Payments SDK.
+ */
+function commerce_braintree_init_sdk($settings) {
+  // Only initiate the SDK once.
+  $init = &drupal_static(__FUNCTION__);
+  if (!isset($init)) {
+    // Include the Braintree SDK.
+    $path = libraries_get_path('Braintree');
+    require_once $path . '/Braintree.php';
+
+    // Initiate configuration.
+    Braintree_Configuration::environment($settings['environment']);
+    // Use the chosen environment's settings.
+    $settings = $settings[$settings['environment']];
+    Braintree_Configuration::merchantId($settings['merchantId']);
+    Braintree_Configuration::publicKey($settings['publicKey']);
+    Braintree_Configuration::privateKey($settings['privateKey']);
+
+    $init = TRUE;
+  }
+}
+
+/**
+ * Add elements to the "Add payment" form on an order's "Payment" tab.
+ */
+function commerce_braintree_submit_form($payment_method, $pane_values, $checkout_pane, $order) {
+  // Only show this form if this is an admin and we're in the admin UI. (We
+  // check the latter condition by checking whether $pane_values and
+  // $checkout_pane are empty.)
+  if (!user_access('administer payments') || !empty($checkout_pane)) {
+    return array();
+  }
+  $form['remote_id'] = array(
+    '#type' => 'textfield',
+    '#title' => t("Braintree's transaction ID"),
+    '#description' => t('A transaction ID is created by Braintree Payments for each transaction processed. Leave blank if unavailable.'),
+  );
+  $form['status'] = array(
+    '#type' => 'select',
+    '#title' => t('Status'),
+    '#options' => array(
+      COMMERCE_PAYMENT_STATUS_SUCCESS => t('Success'),
+      COMMERCE_PAYMENT_STATUS_FAILURE => t('Failure'),
+      COMMERCE_PAYMENT_STATUS_PENDING => t('Pending'),
+    ),
+    '#default_value' => COMMERCE_PAYMENT_STATUS_SUCCESS,
+  );
+
+  return $form;
+}
+
+/**
+ * Handle submission of the "Add payment" form on an order's "Payment" tab.
+ */
+function commerce_braintree_submit_form_submit($payment_method, $pane_form, $pane_values, $order, $charge) {
+  // Only handle this form submission in certain cases.
+  // @see commerce_braintree_submit_form()
+  if (!user_access('administer payments') || empty($pane_values)) {
+    return;
+  }
+  // Create the transaction record.
+  $txn = commerce_payment_transaction_new('braintree', $order->order_id);
+  $txn->instance_id = $payment_method['instance_id'];
+  if (!empty($pane_values['remote_id'])) {
+    $txn->remote_id = $pane_values['remote_id'];
+  }
+  $txn->status = $pane_values['status'];
+  $txn->amount = $charge['amount'];
+  $txn->currency_code = $charge['currency_code'];
+
+  // Save the transaction.
+  commerce_payment_transaction_save($txn);
+}
